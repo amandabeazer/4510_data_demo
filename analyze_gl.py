@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import sys
 
@@ -6,6 +7,62 @@ import sys
 INPUT_FILE = "je_samples (1).xlsx"
 OUTPUT_DIR = "output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "analysis_report.txt")
+
+def calculate_benford_stats(series):
+    """
+    Calculates Benford's Law statistics for a given pandas Series.
+    Returns a DataFrame with Observed Count, Observed %, and Expected %.
+    """
+    # Filter out 0 and NaN
+    series = series.dropna()
+    series = series[series != 0]
+
+    if series.empty:
+        return None
+
+    # Get first digit using string manipulation
+    def get_leading_digit(x):
+        try:
+            s = str(float(abs(x))).replace('.', '').lstrip('0')
+            return int(s[0]) if s else 0
+        except:
+            return 0
+
+    first_digits = series.apply(get_leading_digit)
+    # Filter out any 0s that might have slipped through
+    first_digits = first_digits[first_digits != 0]
+
+    if first_digits.empty:
+        return None
+
+    # Count frequencies
+    counts = first_digits.value_counts().sort_index()
+
+    # Ensure all digits 1-9 are present
+    for i in range(1, 10):
+        if i not in counts:
+            counts[i] = 0
+
+    counts = counts.sort_index()
+
+    # Calculate percentages
+    total_count = counts.sum()
+    observed_pct = (counts / total_count) * 100
+
+    # Expected Benford percentages
+    digits = np.arange(1, 10)
+    expected_pct = np.log10(1 + 1/digits) * 100
+
+    # Create DataFrame
+    df_res = pd.DataFrame({
+        'Digit': digits,
+        'Observed Count': counts.values,
+        'Observed %': observed_pct.values,
+        'Expected %': expected_pct
+    })
+
+    df_res.set_index('Digit', inplace=True)
+    return df_res
 
 def analyze_file():
     if not os.path.exists(INPUT_FILE):
@@ -76,6 +133,35 @@ def analyze_file():
             f.write(stats.to_string())
         else:
             f.write("No numerical columns found.\n")
+        f.write("\n")
+
+        # Benford Analysis
+        f.write("Benford Analysis (Column: Amount):\n")
+        f.write("-" * 20 + "\n")
+
+        if 'Amount' in df.columns:
+            benford_stats = calculate_benford_stats(df['Amount'])
+            if benford_stats is not None:
+                 f.write(benford_stats.to_string(float_format="%.2f"))
+                 f.write("\n\n")
+
+                 # Basic check for concern
+                 benford_stats['Deviation'] = (benford_stats['Observed %'] - benford_stats['Expected %']).abs()
+                 max_dev = benford_stats['Deviation'].max()
+                 f.write(f"Maximum deviation from expected: {max_dev:.2f}%\n")
+
+                 significant_digits = benford_stats[benford_stats['Deviation'] > 2.0]
+                 if not significant_digits.empty:
+                     f.write("WARNING: The following digits show significant deviation (>2.0%):\n")
+                     for digit, row in significant_digits.iterrows():
+                         f.write(f"  Digit {digit}: Observed {row['Observed %']:.2f}% vs Expected {row['Expected %']:.2f}% (Diff: {row['Observed %'] - row['Expected %']:.2f}%)\n")
+                     f.write("Further investigation recommended.\n")
+                 else:
+                     f.write("No significant deviation (>2.0%) detected.\n")
+            else:
+                f.write("Could not perform Benford analysis (no valid data).\n")
+        else:
+             f.write("Column 'Amount' not found.\n")
         f.write("\n")
 
     print(f"Analysis complete. Report saved to {OUTPUT_FILE}")
